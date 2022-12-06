@@ -56,7 +56,7 @@ $$U(s) = R(s) + \gamma \sum_{s'} P(s' \mid s,a) U(s')$$
 
 A state $s$ has successors $s'$ that can be reached via action. The reward at state $s$ is given by $R(s)$ and $U(s)$ symbolizes the internal value of a state called utility value. It is simply given by the current reward plus a weighted sum over the successors of state $s$ with their respective transition probabilities which is discounted by factor $\gamma \in \[0,1\]$. This **discount factor** $\gamma$ is a parameter that needs to be specified prior to the learning process and represents how much the agent should value reward that potentially far in the future. 
 
-####Temporal-difference Learning (TD)
+#### Temporal-difference Learning (TD)
 
 One way of using the Bellman equation (maybe reference) in the learning process is called temporal-difference learning. While the agent interacts with its environment, the temporal-difference approach adjusts the utility values of observed states such that they agree with the Bellman equation. Therefore, the Bellman equation acts as a constraint equation that needs to be satisfied. 
 
@@ -98,9 +98,21 @@ These ideas can easily be applied to temporal-differnce learners by simply chang
 
 $$\theta_i  \leftarrow \theta_i + \alpha \[R(s) + \gamma \hat{U}_\theta (s') - \hat{U}_\theta (s) \] \frac{\partial \hat{U}_\theta (s)}{\partial \theta_i} $$
 
-
-
 Notice, that we only used utility values here, but the notion of features can easily be extended to quality values where features are functions of states <em>and </em> actions.
+
+#### Exploration and Exploitation
+
+A reinforcement learning agent tries to maximize the collected reward over (possibly infinite) time. Since it does not fully know the environment but only a subset of states, we need to take into consideration that the agent might not act optimally despite choosing actions that lead to high utility values or receiving high immediate rewards. This means that the agent can act optimally with respect to its current belief of the environment (the **model**), but suboptimal with respect to the true environment. Therefore it is desireable to constantly improve the model to receive greater rewards in the future, while still collecting high rewards in the meantime. 
+
+This problem is described by the **Exploration-Exploitation tradeoff** and can be tackled by an agent that explores new states forever while being greedy in the limit i.e. chooses actions that bring optimal reward.
+
+Common approaches are for example an $\epsilon$-greedy scheme in which the agent chooses a random action with a probability of $1-\epsilon$ and is greedy (chooses the action that leads to high values states) otherwise. Typically $\epsilon$ is value around $0.9$.
+
+Other approaches include a probabilistic treatment to action selection where the action uses a softmax function.
+
+For quality values the action probabilities are given as follows:
+
+$$\pi_\theta(s,a) =  \frac{e^{ \hat{Q_\theta} (s,a)}} {\sum_{a'} e^{ \hat{Q}_{\theta} (s,a')}} $$
 
 ## PACMAN
 

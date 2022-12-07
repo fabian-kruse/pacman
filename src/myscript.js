@@ -3,7 +3,7 @@ var stepsize;
 var playfieldWidth;
 var playfield;
 var myPlayfield;
-var food_count;
+var foodpill_count;
 var timeStep = 160;
 var roundTo = 4;
 var agent;
@@ -14,6 +14,7 @@ var actions = [];
 var rewards = [];
 var values = [];
 var features = [];
+var translateActors = ['pacman', 'red', 'pink', 'blue', 'yellow'];
 
 var positions = {
 	pacman: {
@@ -28,7 +29,7 @@ var positions = {
 	blue: { coordinates: [7, 34], lastValidPos: [0, 0], leftHome: false },
 	yellow: { coordinates: [7, 34], lastValidPos: [0, 0], leftHome: false },
 };
-var pills = [
+var powerpills = [
 	[24, 40],
 	[24, 480],
 	[64, 120],
@@ -37,72 +38,208 @@ var pills = [
 ];
 const action_list = ['up', 'down', 'left', 'right'];
 
-class Model {
-	constructor(num_inputs, hidden_size, num_actions) {
-		this.num_inputs = num_inputs;
-		this.hidden_size = hidden_size;
-		this.num_actions = num_actions;
-
-		this.actor = this.build_actor();
-		this.critic = this.build_critic();
+class StateRepresenter {
+	constructor() {
+		this.total_foodpills = 275;
+		this.total_frightened_time = g.levels.frightTotalTime + 46;
+		this.maximum_path_length = 56;
+		this.eaten_foodpills = 0;
+		this.prev_direction = 'left';
+		this.eaten_powerpills = 0;
 	}
 
-	//TODO:might add glorotinitializer
-
-	build_critic() {
-		const input = tf.input({ shape: [this.num_inputs] });
-
-		//critic network
-		const value_fn_hidden = tf.layers
-			.dense({
-				units: this.hidden_size,
-				activation: 'relu',
-				name: 'critic_hidden',
-			})
-			.apply(input);
-		const value_fn = tf.layers
-			.dense({ units: 1, activation: 'linear', name: 'critic_output' })
-			.apply(value_fn_hidden);
-		return tf.model({ inputs: input, outputs: value_fn });
+	reset() {
+		this.prev_direction = 'left';
+		this.eaten_powerpills = 0;
+		this.eaten_foodpills = 0;
 	}
 
-	build_actor() {
-		const input = tf.input({ shape: [this.num_inputs] });
-
-		//policy network
-		const policy_hidden = tf.layers
-			.dense({
-				units: this.hidden_size,
-				activation: 'relu',
-				name: 'policy_hidden',
-			})
-			.apply(input);
-		const logits = tf.layers
-			.dense({
-				units: this.num_actions,
-				activation: 'softmax',
-				name: 'policy_output',
-			})
-			.apply(policy_hidden);
-		return tf.model({ inputs: input, outputs: logits });
+	getInitialFeatures() {
+		return [0, 0, 0, 1, 0, 0, 0, 0, 0];
 	}
 
-	//returns float
-	forward_pass(inputs) {
-		let as_tensor = tf.tensor(inputs, [1, inputs.length]);
-		return [this.actor.predict(as_tensor), this.critic.predict(as_tensor)];
+	ateFoodpill() {
+		this.eaten_foodpills = g.dotsEaten;
 	}
 
-	actionFromDistribution(logits) {
-		//tf.squeeze(tf.multinomial(logits, 1), (axis = -1));
-		return tf.multinomial(logits, 1);
+	atePowerpill() {
+		console.log('pill eaten');
+		this.time_eaten_powerpill = Date.now() - 1;
+		this.eaten_powerpills = this.eaten_powerpills + 1;
 	}
 
-	action_value(observation) {
-		let [logits, value] = this.forward_pass(observation);
-		let action = this.actionFromDistribution(logits);
-		//console.log('action: ' + action, 'value: ' + value);
-		return [action, value];
+	//4.1 ->
+	//1: everything eaten
+	//:0 nothing eaten
+	lvl_progress() {
+		return g.dotsEaten / this.total_foodpills;
+	}
+
+	//4.2
+	//1: long time to eat ghost -> 0: ghosts not frightened anymore
+	eval_powerpill() {
+		//console.log(Date.now() - this.time_eaten_powerpill, g.actors[1].mode , positions["red"].isFrightened)
+		if (
+			Date.now() - this.time_eaten_powerpill <
+			this.total_frightened_time * 10
+		) {
+			return (
+				1 -
+				(Date.now() - this.time_eaten_powerpill) /
+					(this.total_frightened_time * 10)
+			);
+		} else {
+			return 0;
+		}
+	}
+
+	//4.3
+	//returs normalized distance to next foodpill
+	//1: foodpill is close
+	//0: foodpill is far
+	eval_food(distanceToFoodpill) {
+		return (
+			(this.maximum_path_length - distanceToFoodpill) / this.maximum_path_length
+		);
+	}
+
+	//4.4
+	//1: ghost is far
+	//0: ghost is close
+	eval_ghost(distanceToGhost) {
+		return (
+			1 -
+			(this.maximum_path_length - distanceToGhost) / this.maximum_path_length
+		);
+	}
+
+	//4.5
+	//1: frightened ghost is very close
+	//0: no frightened ghost available
+	eval_frightened_ghost(timeOfPowerpill, distanceToFrightenedGhost) {
+		if (timeOfPowerpill > 0) {
+			return (
+				(this.maximum_path_length - distanceToFrightenedGhost) /
+				this.maximum_path_length
+			);
+		} else {
+			return 0;
+		}
+	}
+
+	//4.6
+	//1: next powerpill is close
+	//0: next powerpill is far
+	eval_next_powerpill(distanceToPowerpill) {
+		return (
+			(this.maximum_path_length - distanceToPowerpill) /
+			this.maximum_path_length
+		);
+	}
+
+	//4.7 not opposite direction
+	//0: opposite direction
+	eval_direction(current_direction, prev_direction) {
+		if (current_direction != getOppositeDirection(prev_direction)) {
+			return 1; //1
+		} else {
+			return 0;
+		}
+	}
+
+	//evaluates distance from myPos to foodpill, powerpill, frightenedghost and ghost
+	getDistances(myPos, timeOfPowerpill, predict) {
+		let distances = {};
+		distances['foodpill'] = -1;
+		distances['powerpill'] = -1;
+		distances['ghost'] = -1;
+		if (timeOfPowerpill > 0) {
+			distances['frightenedghost'] = -1;
+			for (let i = 1; i < 5; i++) {
+				if (positions[translateActors[i]].inNormalMode) {
+					distances['ghost'] = -1;
+					return shortestPathBFStoAll(myPos, distances, predict);
+				}
+			}
+		} else {
+			distances['frightenedghost'] = this.maximum_path_length; //dont need distance to frightened ghosts, bc there are non
+		}
+		return shortestPathBFStoAll(myPos, distances, predict);
+	}
+
+	//returns the abstract state representation in form of a feature vector
+	getFeaturesForState(currentState, curr_direction, prev_direction) {
+		let features = [];
+		features.push(this.lvl_progress());
+		features.push(this.eval_powerpill());
+
+		let distances = this.getDistances(currentState, features[1], false);
+		features.push(this.eval_food(distances['foodpill']));
+		features.push(this.eval_ghost(distances['ghost']));
+		features.push(
+			this.eval_frightened_ghost(features[1], distances['frightenedghost'])
+		);
+		features.push(this.eval_next_powerpill(distances['powerpill']));
+		features.push(this.eval_direction(curr_direction, prev_direction));
+		features.push(g.dotsEaten); //used in ate_foodpill()
+		features.push(this.eaten_powerpills); // not used
+		return features;
+	}
+
+	getSuccessorFeatures(currentState, curr_direction, prev_direction) {
+		let currentFeatures = this.getFeaturesForState(
+			currentState,
+			curr_direction,
+			prev_direction
+		);
+		let succ = {};
+		let successorStates = getSuccessors(currentState); // object, succesorStates["up"] gives upper successor state
+		for (var direction in successorStates) {
+			let features = [];
+			//1: progress
+			if (successorStates[direction].hasDot != 'no') {
+				// food in direction -> increase progress
+				features.push(currentFeatures[0] + 1 / this.total_foodpills);
+			} else {
+				features.push(currentFeatures[0]);
+			}
+			//2: time till powerpill is gone
+			if (successorStates[direction].hasDot == 'pill') {
+				//next state has pill
+				features.push(1);
+			} else if (currentFeatures[1] == 0) {
+				//does not have pill and has not eaten pill
+				features.push(0);
+			} else {
+				//does not have pill but has eaten one
+				features.push(
+					Math.max(
+						currentFeatures[1] - timeStep / (this.total_frightened_time * 10)
+					),
+					0
+				); //not sure
+			}
+			let distances = this.getDistances(
+				successorStates[direction],
+				features[1],
+				true
+			);
+			//3: distance to food
+			features.push(this.eval_food(distances['foodpill']));
+			//4: distance to closest ghost
+			features.push(this.eval_ghost(distances['ghost'])); //inaccurate bc does not respecct movement of ghost
+			//5: distance to frightened ghost
+			features.push(
+				this.eval_frightened_ghost(features[1], distances['frightenedghost'])
+			); //same here
+			//6: distance to next powerpill
+			features.push(this.eval_next_powerpill(distances['powerpill']));
+			//7: if direction is current direction
+			features.push(this.eval_direction(direction, curr_direction));
+
+			succ[direction] = features;
+		}
+		return succ;
 	}
 }
 
@@ -167,7 +304,7 @@ class RewardHandler {
 				if (!modes.has(g.actors[ghost].mode)) {
 					console.log('lost');
 					this.gotEaten = Date.now();
-					return [-500, true];
+					return [-300, true];
 				}
 			}
 		}
@@ -191,7 +328,7 @@ class RewardHandler {
 		return 0;
 	}
 
-	ate_food() {
+	ate_foodpill() {
 		//works
 		if (this.prevFeatures[7] < this.currentFeatures[7]) {
 			return 12;
@@ -200,7 +337,7 @@ class RewardHandler {
 		}
 	}
 
-	ate_powerPill() {
+	ate_powerpill() {
 		//works
 		if (this.prevFeatures[8] < this.currentFeatures[8]) {
 			console.log('ate a powerpill');
@@ -226,229 +363,14 @@ class RewardHandler {
 			this.is_win() +
 			lost[0] +
 			this.ate_ghost() +
-			this.ate_food() +
-			this.ate_powerPill() +
+			this.ate_foodpill() +
+			this.ate_powerpill() +
 			this.is_reverse()
 		);
 	}
 }
 
-function getOppositeDirection(direction) {
-	if (direction == 'no') {
-		return 'no';
-	}
-	let oppositeOfAction = ['down', 'up', 'right', 'left'];
-	return oppositeOfAction[action_list.indexOf(direction)];
-}
-
-class StateRepresenter {
-	constructor() {
-		this.total_food = 275;
-		this.total_scared_time = g.levels.frightTotalTime + 46;
-		this.maximum_path_length = 56;
-		this.eaten_food = 0;
-		this.prev_direction = 'left';
-		this.eaten_pills = 0;
-	}
-
-	reset() {
-		this.prev_direction = 'left';
-		this.eaten_pills = 0;
-		this.eaten_food = 0;
-	}
-
-	getInitialFeatures() {
-		return [0, 0, 0, 1, 0, 0, 0, 0, 0];
-	}
-
-	ateFood() {
-		this.eaten_food = g.dotsEaten;
-	}
-
-	atePill() {
-		console.log('pill eaten');
-		this.time_eaten_powerPill = Date.now() - 1;
-		this.eaten_pills = this.eaten_pills + 1;
-	}
-
-	//4.1 ->
-	//1: everything eaten
-	//:0 nothing eaten
-	lvl_progress() {
-		return g.dotsEaten / this.total_food;
-	}
-
-	//4.2
-	//1: long time to eat ghost -> 0: ghosts not scared anymore
-	eval_powerPill() {
-		//console.log(Date.now() - this.time_eaten_powerPill, g.actors[1].mode , positions["red"].isScared)
-		if (Date.now() - this.time_eaten_powerPill < this.total_scared_time * 10) {
-			return (
-				1 -
-				(Date.now() - this.time_eaten_powerPill) / (this.total_scared_time * 10)
-			);
-		} else {
-			return 0;
-		}
-	}
-
-	//4.3
-	//returs normalized distance to next food
-	//1: food is close
-	//0: food is far
-	eval_food(distanceToFood) {
-		return (
-			(this.maximum_path_length - distanceToFood) / this.maximum_path_length
-		);
-	}
-
-	//4.4
-	//1: ghost is far
-	//0: ghost is close
-	eval_ghost(distanceToGhost) {
-		return (
-			1 -
-			(this.maximum_path_length - distanceToGhost) / this.maximum_path_length
-		);
-	}
-
-	//4.5
-	//1: scared ghost is very close
-	//0: no scared ghost available
-	eval_scared_ghost(timeOfPowerPill, distanceToScaredGhost) {
-		if (timeOfPowerPill > 0) {
-			return (
-				(this.maximum_path_length - distanceToScaredGhost) /
-				this.maximum_path_length
-			);
-		} else {
-			return 0;
-		}
-	}
-
-	//4.6
-	//1: next Powerpill is close
-	//0: next Powerpill is far
-	eval_next_powerPill(distanceToPowerpill) {
-		return (
-			(this.maximum_path_length - distanceToPowerpill) /
-			this.maximum_path_length
-		);
-	}
-
-	//4.7
-	//1: still current direction
-	//0: changed direction
-	eval_direction(current_direction, prev_direction) {
-		if (current_direction != getOppositeDirection(prev_direction)) {
-			return 1; //1
-		} else {
-			return 0;
-		}
-	}
-
-	//evaluates distance from myPos to food, powerpill, scaredghost and ghost
-	getDistances(myPos, timeOfPowerPill, predict) {
-		let distances = {};
-		distances['food'] = -1;
-		distances['powerpill'] = -1;
-		distances['ghost'] = -1;
-		if (timeOfPowerPill > 0) {
-			distances['scaredghost'] = -1;
-			for (let i = 1; i < 5; i++) {
-				if (positions[translateActors(i)].inNormalMode) {
-					distances['ghost'] = -1;
-					return shortestPathBFStoAll(myPos, distances, predict);
-				}
-			}
-		} else {
-			distances['scaredghost'] = this.maximum_path_length; //dont need distance to scared ghosts, bc there are non
-		}
-		return shortestPathBFStoAll(myPos, distances, predict);
-	}
-
-	//returns the abstract state representation in form of a feature vector
-	getFeaturesForState(currentState, curr_direction, prev_direction) {
-		let features = [];
-		features.push(this.lvl_progress());
-		features.push(this.eval_powerPill());
-
-		let distances = this.getDistances(currentState, features[1], false);
-		features.push(this.eval_food(distances['food']));
-		features.push(this.eval_ghost(distances['ghost']));
-		features.push(
-			this.eval_scared_ghost(features[1], distances['scaredghost'])
-		);
-		features.push(this.eval_next_powerPill(distances['powerpill']));
-		features.push(this.eval_direction(curr_direction, prev_direction));
-		features.push(g.dotsEaten); //used in ate_food()
-		features.push(this.eaten_pills); // not used
-		return features;
-	}
-
-	getSuccessorFeatures(currentState, curr_direction, prev_direction) {
-		let currentFeatures = this.getFeaturesForState(
-			currentState,
-			curr_direction,
-			prev_direction
-		);
-		let succ = {};
-		let successorStates = getSuccessors(currentState); // object, succesorStates["up"] gives upper successor state
-		for (var direction in successorStates) {
-			let features = [];
-			//1: progress
-			if (successorStates[direction].hasDot != 'no') {
-				// food in direction -> increase progress
-				features.push(currentFeatures[0] + 1 / this.total_food);
-			} else {
-				features.push(currentFeatures[0]);
-			}
-			//2: time till powerpill is gone
-			if (successorStates[direction].hasDot == 'pill') {
-				//next state has pill
-				features.push(1);
-			} else if (currentFeatures[1] == 0) {
-				//does not have pill and has not eaten pill
-				features.push(0);
-			} else {
-				//does not have pill but has eaten one
-				features.push(
-					Math.max(
-						currentFeatures[1] - timeStep / (this.total_scared_time * 10)
-					),
-					0
-				); //not sure
-			}
-			let distances = this.getDistances(
-				successorStates[direction],
-				features[1],
-				true
-			);
-			//3: distance to food
-			features.push(this.eval_food(distances['food']));
-			//4: distance to closest ghost
-			features.push(this.eval_ghost(distances['ghost'])); //inaccurate bc does not respecct movement of ghost
-			//5: distance to scared ghost
-			features.push(
-				this.eval_scared_ghost(features[1], distances['scaredghost'])
-			); //same here
-			//6: distance to next powerpill
-			features.push(this.eval_next_powerPill(distances['powerpill']));
-			//7: if direction is current direction
-			features.push(this.eval_direction(direction, curr_direction));
-
-			succ[direction] = features;
-		}
-		return succ;
-	}
-}
-
-//at state
-//get action (acoording to current weights) explore or exploit
-//do action
-//new state
-//get reward for new state
-//update weights
+//this class represents the linear function approximator agent
 class Agent {
 	constructor() {
 		this.epsilon = 0.9;
@@ -599,11 +521,80 @@ class Agent {
 	}
 }
 
+//this class implements the actor critic algorithm
+class Model {
+	constructor(num_inputs, hidden_size, num_actions) {
+		this.num_inputs = num_inputs;
+		this.hidden_size = hidden_size;
+		this.num_actions = num_actions;
+
+		this.actor = this.build_actor();
+		this.critic = this.build_critic();
+	}
+
+	//TODO:might add glorotinitializer
+	build_critic() {
+		const input = tf.input({ shape: [this.num_inputs] });
+
+		//critic network
+		const value_fn_hidden = tf.layers
+			.dense({
+				units: this.hidden_size,
+				activation: 'relu',
+				name: 'critic_hidden',
+			})
+			.apply(input);
+		const value_fn = tf.layers
+			.dense({ units: 1, activation: 'linear', name: 'critic_output' })
+			.apply(value_fn_hidden);
+		return tf.model({ inputs: input, outputs: value_fn });
+	}
+
+	build_actor() {
+		const input = tf.input({ shape: [this.num_inputs] });
+
+		//policy network
+		const policy_hidden = tf.layers
+			.dense({
+				units: this.hidden_size,
+				activation: 'relu',
+				name: 'policy_hidden',
+			})
+			.apply(input);
+		const logits = tf.layers
+			.dense({
+				units: this.num_actions,
+				activation: 'softmax',
+				name: 'policy_output',
+			})
+			.apply(policy_hidden);
+		return tf.model({ inputs: input, outputs: logits });
+	}
+
+	//returns float
+	forward_pass(inputs) {
+		let as_tensor = tf.tensor(inputs, [1, inputs.length]);
+		return [this.actor.predict(as_tensor), this.critic.predict(as_tensor)];
+	}
+
+	actionFromDistribution(logits) {
+		//tf.squeeze(tf.multinomial(logits, 1), (axis = -1));
+		return tf.multinomial(logits, 1);
+	}
+
+	action_value(observation) {
+		let [logits, value] = this.forward_pass(observation);
+		let action = this.actionFromDistribution(logits);
+		//console.log('action: ' + action, 'value: ' + value);
+		return [action, value];
+	}
+}
+
+//this class handles forward pass and backpropagation of the neural networks
 class neuralController {
 	constructor() {
 		this.gamma = 0.95;
 		this.learning_rate = 0.005;
-		this.value_c = 0.5;
 		this.neuralModel = new Model(7, 50, 4);
 		this.neuralModel.actor.compile({
 			optimizer: tf.train.adam(this.learning_rate),
@@ -637,10 +628,10 @@ class neuralController {
 	}
 }
 
+//this class impements the neural agent
 class neuralAgent {
 	constructor() {
 		this.controller = new neuralController();
-		this.epsilon = 0.9;
 		this.stateRep = new StateRepresenter();
 		this.currentStateFeatures = roundFeatures(
 			this.stateRep.getInitialFeatures()
@@ -771,41 +762,15 @@ function roundFeatures(features) {
 
 //main function that runs the agent
 async function myfunction() {
-	/* 	var neuralController = new Model(7, 50, 4);
-	tfvis.show.modelSummary({ name: 'Model Summary' }, neuralController.model);
-	myPlayfield = buildPlayField();
-	agent = new Agent();
-	updatePositions(agent.stateRep);
-	let currentfeatures;
-	while (true) {
-		currentfeatures = agent.takeStep();
-		await checkForPause(currentfeatures);
-		if (g.lives == -1) {
-			console.log('died after eating:', agent.stateRep.eaten_food);
-			startNew();
-			await timeOut(2500);
-			myPlayfield = buildPlayField();
-			updatePositions(agent.stateRep);
-			agent.newLife();
-		}
-	} */
 	myPlayfield = buildPlayField();
 	agent = new neuralAgent();
-	/* tfvis.show.modelSummary(
-		{ name: 'Actor Summary' },
-		agent.controller.neuralModel.actor
-	);
-	tfvis.show.modelSummary(
-		{ name: 'Critic Summary' },
-		agent.controller.neuralModel.critic
-	); */
 	updatePositions(agent.stateRep);
 	let currentfeatures;
 	while (true) {
 		currentfeatures = agent.takeStep();
 		await checkForPause(currentfeatures, agent.rewardHandler.is_dead);
 		if (g.lives == -1) {
-			console.log('died after eating:', agent.stateRep.eaten_food);
+			console.log('died after eating:', agent.stateRep.eaten_foodpills);
 			startNew();
 			await timeOut(2500);
 			myPlayfield = buildPlayField();
@@ -813,125 +778,23 @@ async function myfunction() {
 			agent.newLife();
 		}
 	}
-
-	myPlayfield = buildPlayField();
-	console.log(myPlayfield);
-	var stateRep = new StateRepresenter();
-
-	let currentFeatures = stateRep.getInitialFeatures();
-	console.log(currentFeatures);
-	let lastState = currentFeatures;
-	var rewardHandler = new RewardHandler(currentFeatures);
-	var prev_direction;
-	var curr_direction = getDirection(0);
-	updatePositions(stateRep);
-	while (true) {
-		prev_direction = curr_direction;
-		curr_direction = getDirection(0);
-		lastState = currentFeatures.slice();
-		stateUpdater(stateRep);
-		currentFeatures = stateRep.getFeaturesForState(
-			myPlayfield[positions['pacman'].coordinates[0]][
-				positions['pacman'].coordinates[1]
-			],
-			curr_direction,
-			prev_direction
-		);
-		console.log(currentFeatures[2]);
-		let successorFeatures = stateRep.getSuccessorFeatures(
-			myPlayfield[positions['pacman'].coordinates[0]][
-				positions['pacman'].coordinates[1]
-			],
-			getDirection(0),
-			positions['pacman'].lastDirection
-		);
-		//console.log(successorFeatures)
-		rewardHandler.update(currentFeatures, '');
-		console.log(
-			rewardHandler.get_reward(),
-			rewardHandler.is_win(),
-			rewardHandler.is_lose(),
-			rewardHandler.ate_ghost(),
-			rewardHandler.ate_food(),
-			rewardHandler.ate_powerPill(),
-			rewardHandler.is_reverse()
-		);
-		await checkForPause(currentFeatures);
-		updatePositions(stateRep);
-		if (g.lives == -1) {
-			startNew();
-			await timeOut(2500);
-			myPlayfield = buildPlayField();
-			console.log('relive');
-			updatePositions(stateRep);
-			stateRep.reset();
-		}
-		/* let action = getBestAction(successorFeatures) 
-        doAction(action) */
-	}
-}
-
-function readWeights() {
-	try {
-		let file = document.querySelector('#weightFile').files[0];
-		let reader = new FileReader();
-		reader.readAsText(file, 'UTF-8');
-		reader.onload = function () {
-			let text_array = reader.result.split('#');
-			let last_entry = text_array.pop().split(' ')[2];
-			console.log(last_entry);
-			agent.weights = last_entry.split(',').map(Number);
-			console.log('successfully uploaded! Weights now: ' + agent.weights);
-		};
-
-		reader.onerror = function () {
-			console.log(reader.error);
-		};
-	} catch {
-		console.log('error reading weights');
-	}
-}
-
-function saveWeights() {
-	console.log(textFile);
-	var blob = new Blob([textFile.toString()], {
-		type: 'text/plain;charset=utf-8',
-	});
-	var url = URL.createObjectURL(blob);
-
-	var a = document.createElement('a');
-	a.download = 'weights.txt';
-	a.href = url;
-	a.click();
 }
 
 //function that handles the start of a new game
 function startNew() {
 	g.insertCoin();
 	for (let i = 2; i < 5; i++) {
-		positions[translateActors(i)].leftHome = false;
+		positions[translateActors[i]].leftHome = false;
 	}
 	g.levels.frightTime = 540;
 	g.levels.frightTotalTime = 729;
-	pills = [
+	powerpills = [
 		[24, 40],
 		[24, 480],
 		[64, 120],
 		[120, 40],
 		[120, 480],
 	];
-	//updates weight file
-	/* let text = 'ate: ' + agent.stateRep.eaten_food + ' ';
-	for (let i = 0; i < agent.weights.length; i++) {
-		text = text + agent.weights[i] + ',';
-	}
-	text = text.substring(0, text.length - 1);
-	text = text + '#\n';
-	if (textFile.split('#').length > 25) {
-		textFile = '';
-	}
-	textFile = textFile.concat(text);
-	console.log(agent.weights); */
 }
 
 //helper funtion that returns a promise -> used for timeouts
@@ -950,7 +813,7 @@ function checkForPause(currentFeatures, is_dead) {
 		return new Promise((res) => setTimeout(() => res('p2'), 5200));
 	}
 	if (currentFeatures[4] == 1) {
-		//distance to scared ghost
+		//distance to frightened ghost
 		console.log('timer, ate ghost');
 		return new Promise((res) => setTimeout(() => res('p2'), 2000));
 	}
@@ -975,8 +838,8 @@ function applyAction(direction) {
 
 //function that updates the myPlayfield-variable to be consistent with game state
 function stateUpdater(stateRep) {
-	if (stateRep.eaten_food < g.dotsEaten) {
-		stateRep.ateFood();
+	if (stateRep.eaten_foodpills < g.dotsEaten) {
+		stateRep.ateFoodpill();
 		myPlayfield[positions['pacman'].coordinates[0]][
 			positions['pacman'].coordinates[1]
 		].hasDot = 'no';
@@ -1026,9 +889,10 @@ function shortestPathBFStoAll(start, distances, predict) {
 	return distances;
 }
 
+//function that returns the predicted next state of ghosts
 function predictedState(index) {
 	let direction = getDirection(index);
-	let succ = getSuccessors(positions[translateActors(index)]);
+	let succ = getSuccessors(positions[translateActors[index]]);
 	if (direction in succ) {
 		return succ[direction].coordinates; //state in direction
 	}
@@ -1039,19 +903,20 @@ function predictedState(index) {
 			}
 		}
 	}
-	return positions[translateActors(index)].coordinates; //current state
+	return positions[translateActors[index]].coordinates; //current state
 }
 
+//function that handles the termination criteria of the BFS algorithm
 function foundEverthing(next, distances, predict) {
-	if (distances['food'] == -1 && next.state.hasDot == 'food') {
-		distances['food'] = next.distance;
+	if (distances['foodpill'] == -1 && next.state.hasDot == 'food') {
+		distances['foodpill'] = next.distance;
 	}
 	if (distances['ghost'] == -1) {
 		for (let i = 1; i < 5; i++) {
 			if (predict) {
 				if (
-					positions[translateActors(i)].leftHome &&
-					positions[translateActors(i)].inNormalMode &&
+					positions[translateActors[i]].leftHome &&
+					positions[translateActors[i]].inNormalMode &&
 					arrayEquals(next.state.coordinates, predictedState(i))
 				) {
 					distances['ghost'] = next.distance;
@@ -1059,11 +924,11 @@ function foundEverthing(next, distances, predict) {
 				}
 			} else {
 				if (
-					positions[translateActors(i)].leftHome &&
-					positions[translateActors(i)].inNormalMode &&
+					positions[translateActors[i]].leftHome &&
+					positions[translateActors[i]].inNormalMode &&
 					arrayEquals(
 						next.state.coordinates,
-						positions[translateActors(i)].coordinates
+						positions[translateActors[i]].coordinates
 					)
 				) {
 					distances['ghost'] = next.distance;
@@ -1072,27 +937,27 @@ function foundEverthing(next, distances, predict) {
 			}
 		}
 	}
-	if (distances['scaredghost'] == -1) {
+	if (distances['frightenedghost'] == -1) {
 		for (let i = 1; i < 5; i++) {
 			if (!predict) {
 				if (
-					positions[translateActors(i)].leftHome &&
-					positions[translateActors(i)].isScared &&
+					positions[translateActors[i]].leftHome &&
+					positions[translateActors[i]].isFrightened &&
 					arrayEquals(next.state.coordinates, predictedState(i))
 				) {
-					distances['scaredghost'] = next.distance;
+					distances['frightenedghost'] = next.distance;
 					break;
 				}
 			} else {
 				if (
-					positions[translateActors(i)].leftHome &&
-					positions[translateActors(i)].isScared &&
+					positions[translateActors[i]].leftHome &&
+					positions[translateActors[i]].isFrightened &&
 					arrayEquals(
 						next.state.coordinates,
-						positions[translateActors(i)].coordinates
+						positions[translateActors[i]].coordinates
 					)
 				) {
-					distances['scaredghost'] = next.distance;
+					distances['frightenedghost'] = next.distance;
 					break;
 				}
 			}
@@ -1189,14 +1054,14 @@ function updatePositions(stateRep) {
 	let actors = g.actors;
 	for (let i = 0; i < 5; i++) {
 		//only update positions when left home for first time
-		if (positions[translateActors(i)].leftHome) {
+		if (positions[translateActors[i]].leftHome) {
 			try {
-				positions[translateActors(i)].lastValidPos = [
+				positions[translateActors[i]].lastValidPos = [
 					actors[i].lastGoodTilePos[0] / 8,
 					(actors[i].lastGoodTilePos[1] - 32) / 8,
 				];
 			} catch {
-				positions[translateActors(i)].lastValidPos = [64 / 8, (280 - 32) / 8];
+				positions[translateActors[i]].lastValidPos = [64 / 8, (280 - 32) / 8];
 			}
 
 			let x, y;
@@ -1211,56 +1076,39 @@ function updatePositions(stateRep) {
 				y = Math.round((actors[i].pos[1] - 32) / 8);
 			}
 			if (!myPlayfield[x][y].isWall) {
-				positions[translateActors(i)].coordinates = [x, y];
+				positions[translateActors[i]].coordinates = [x, y];
 			} else {
-				positions[translateActors(i)].coordinates =
-					positions[translateActors(i)].lastValidPos;
+				positions[translateActors[i]].coordinates =
+					positions[translateActors[i]].lastValidPos;
 				myPlayfield = buildPlayField();
 			}
 			if (i > 0) {
 				// ghost only
-				positions[translateActors(i)].inNormalMode =
+				positions[translateActors[i]].inNormalMode =
 					g.actors[i].mode == 1 || g.actors[i].mode == 2;
-				positions[translateActors(i)].isScared = g.actors[i].mode == 4;
+				positions[translateActors[i]].isFrightened = g.actors[i].mode == 4;
 			}
 		} else {
 			if (Math.floor((actors[i].pos[1] - 32) / 8) < 5) {
-				positions[translateActors(i)].leftHome = true;
+				positions[translateActors[i]].leftHome = true;
 			}
 		}
 	}
-	for (let i = 0; i < pills.length; i++) {
-		if (pills[i] == null) {
+	for (let i = 0; i < powerpills.length; i++) {
+		if (powerpills[i] == null) {
 			continue;
 		}
-		if (g.playfield[pills[i][0]][pills[i][1]].dot != 2) {
-			stateRep.atePill();
-			pills[i] = null;
+		if (g.playfield[powerpills[i][0]][powerpills[i][1]].dot != 2) {
+			stateRep.atePowerpill();
+			powerpills[i] = null;
 		}
-	}
-}
-
-//function that can be relaced by a dictionary
-//translates between index and name of actor
-function translateActors(i) {
-	switch (i) {
-		case 0:
-			return 'pacman';
-		case 1:
-			return 'red';
-		case 2:
-			return 'pink';
-		case 3:
-			return 'blue';
-		case 4:
-			return 'yellow';
 	}
 }
 
 //function that updates the myPlayfield-variable
 function buildPlayField() {
 	let currG = g['playfield'].slice(0);
-	food_count = [0, 0];
+	foodpill_count = [0, 0];
 	let tempPlayfield = [];
 	for (let row = 0; row < g.playfieldHeight + 2; row++) {
 		let thisRow = [];
@@ -1273,10 +1121,10 @@ function buildPlayField() {
 				thisState['isWall'] = false;
 			}
 			if (currState['dot'] == 1) {
-				food_count[0] = food_count[0] + 1;
+				foodpill_count[0] = foodpill_count[0] + 1;
 				thisState['hasDot'] = 'food';
 			} else if (currState['dot'] == 2) {
-				food_count[1] = food_count[1] + 1;
+				foodpill_count[1] = foodpill_count[1] + 1;
 				thisState['hasDot'] = 'pill';
 			} else {
 				thisState['hasDot'] = 'no';
@@ -1294,6 +1142,14 @@ function buildPlayField() {
 	return tempPlayfield;
 }
 
+function getOppositeDirection(direction) {
+	if (direction == 'no') {
+		return 'no';
+	}
+	let oppositeOfAction = ['down', 'up', 'right', 'left'];
+	return oppositeOfAction[action_list.indexOf(direction)];
+}
+
 //helper function that checks for equality of arrays
 function arrayEquals(a, b) {
 	return (
@@ -1302,6 +1158,56 @@ function arrayEquals(a, b) {
 		a.length === b.length &&
 		a.every((val, index) => val === b[index])
 	);
+}
+
+//returns int i in [min, max)
+function getRandomInt(min, max) {
+	min = Math.ceil(min);
+	max = Math.floor(max);
+	return Math.floor(Math.random() * (max - min)) + min;
+}
+
+//helper function that returns random element in array
+function getRandomElement(array) {
+	return array[getRandomInt(0, array.length)];
+}
+
+//function that handles the upload of stored weights
+//only works for the linear function model
+function readWeights() {
+	try {
+		let file = document.querySelector('#weightFile').files[0];
+		let reader = new FileReader();
+		reader.readAsText(file, 'UTF-8');
+		reader.onload = function () {
+			let text_array = reader.result.split('#');
+			let last_entry = text_array.pop().split(' ')[2];
+			console.log(last_entry);
+			agent.weights = last_entry.split(',').map(Number);
+			console.log('successfully uploaded! Weights now: ' + agent.weights);
+		};
+
+		reader.onerror = function () {
+			console.log(reader.error);
+		};
+	} catch {
+		console.log('error reading weights');
+	}
+}
+
+//function that stores weights of model
+//only works for the linear function model
+function saveWeights() {
+	console.log(textFile);
+	var blob = new Blob([textFile.toString()], {
+		type: 'text/plain;charset=utf-8',
+	});
+	var url = URL.createObjectURL(blob);
+
+	var a = document.createElement('a');
+	a.download = 'weights.txt';
+	a.href = url;
+	a.click();
 }
 
 //finds longest path from any state to any other state on the playfield
@@ -1333,7 +1239,7 @@ function findMaximalPathLength() {
 
 //function that counts the total number of food
 //269
-function countTotalFood() {
+function countTotalFoodpills() {
 	let count = 0;
 	for (let i = 0; i < myPlayfield.length; i++) {
 		for (let j = 0; j < myPlayfield[i].length; j++) {
@@ -1343,16 +1249,4 @@ function countTotalFood() {
 		}
 	}
 	return count;
-}
-
-//returns int i in [min, max)
-function getRandomInt(min, max) {
-	min = Math.ceil(min);
-	max = Math.floor(max);
-	return Math.floor(Math.random() * (max - min)) + min;
-}
-
-//helper function that returns random element in array
-function getRandomElement(array) {
-	return array[getRandomInt(0, array.length)];
 }

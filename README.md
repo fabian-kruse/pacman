@@ -4,9 +4,7 @@ This javascript project implements a deep reinforcement learning agent capable o
  
 <div id="top"></div>
 
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 
 <!-- TABLE OF CONTENTS -->
 <details>
@@ -14,23 +12,41 @@ This javascript project implements a deep reinforcement learning agent capable o
   <ol>
     <li>
       <a href="#about-the-project">About The Project</a>
-      <ul>
-        <li><a href="#built-with">Built With</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-      </ul>
+      <ol>
+        <li><a href="#background">Background</a>
+         <ol>
+           <li><a href="#reinforcement-learning-rl">Reinforcement Learning</a></li>
+           <li><a href="#temporal-difference-learning-td">Temporal-difference Learning</a></li>
+           <li><a href="#generalized-reinforcement-learning">Generalized Reinforcement Learning</a></li>
+           <li><a href="#deep-reinforcement-learning">Deep Reinforcement Learning</a></li>
+           <li><a href="#exploration-and-exploitation">Exploration and Exploitation</a></li>
+           </ol>
+         </li>
+       <li><a href="#pac-man">Pac-Man</a></li>
+       <li><a href="#project-details">Project Details</a>
+         <ol>
+           <li><a href="#features">Features</a></li>
+           <li><a href="#reward">Reward</a></li>
+           <li><a href="#agents">Agents</a>
+            <ol>
+              <li><a href="#linear-function-agent">Linear Function Agent</a></li>
+           <li><a href="#actor-critic-agent">Actor-Critic Agent</a></li>
+            </ol>
+          </li>
+           </ol>
+         </li>
+       </li>
+      <li><a href="#built-with">Built With</a></li>
+      </ol>
     </li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
   </ol>
 </details>
 
-
+<p align="center">
+  <img src="./img/example.png" width="600" title="example of google pacman">
+</p>
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
@@ -121,7 +137,7 @@ $$\pi_\theta(s,a) =  \frac{e^{ \hat{Q_\theta} (s,a)}} {\sum_{a'} e^{ \hat{Q}_{\t
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
-## Pac-Man
+### Pac-Man
 
 Pac-Man is played on a 2D-grid with a specific layout of walls, which makes the playfield a specific labyrinth. 
 During the game, Pac-Man tries to eat all foodpills spread out across the playfield before being hunted down by one of the four ghost that are following him.
@@ -133,7 +149,7 @@ In recognition to its thirty year anniversary in may 2010 Google changed its log
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
-## PROJECT DETAILS
+### PROJECT DETAILS
 
 This project implements two different kinds of agent to interact with the environment of Google Pac-Man. The goal of the agents is to complete the first level.
 
@@ -142,7 +158,7 @@ The first, simpler agent is based on linear function approximation, whereas the 
 Both agents use the same set of features described below. 
 
 
-### Features
+#### Features
 The following set of features are used in this project to give the agent a general valuation of a specific state. 
 
 All features are normalized to have values in $\[0,1\]$ where $0$ is the worst and $1$ the best possible value (for the agent) of a feature.
@@ -155,7 +171,7 @@ All features are normalized to have values in $\[0,1\]$ where $0$ is the worst a
 6. Distance to next powerpill
 7. Evaluate if current action is opposite of previous action
 
-### Reward
+#### Reward
 A central element in reinforcement learning is which states earn what amount of reward, and to which events to these states translate.
 
 For this project, the following set of rewards is used:
@@ -167,9 +183,9 @@ For this project, the following set of rewards is used:
 5. Agent ate a powerpill $\rightarrow 5$
 6. Agent reverse moving direction $\rightarrow -8$
 
-### Agents
+#### Agents
 
-#### Linear Function Agent
+##### Linear Function Agent
 The linear function appoximator uses a Q-learning approach to approximate the true Q-function using a linear function. 
 
 Given the set of features for each state, it updates its internal weights using update rules as described above. 
@@ -177,7 +193,7 @@ Given the set of features for each state, it updates its internal weights using 
 For that is uses a learning rate of $\alpha = 0.1$, a discount factor of $\gamma = 0.5$. 
 Further, it employs an $\epsilon$-greedy action selection scheme where $\epsilon = 0.9$, so it chooses a random action in about every tenth state and is greedy otherwise.
 
-#### Actor-Critic Agent
+##### Actor-Critic Agent
 
 The actor-critic agent uses two different neural networks to estimate the state value and the action distribution separately.
 
@@ -188,16 +204,36 @@ Since the output is a real number and not a logit, it uses a mean squared error 
 
 In contrast to the linear function agent, the actor-critic agent uses a softmax action selection scheme. This makes it such that action that lead to states with low state values are taken proportionally lower.
 
-### Built With
+#### Built With
 
 * [TensorFlow.js](https://www.tensorflow.org/js)
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
+## Running The Project
+
+Currently, the project is configured using a deep reinforcement agent. 
+
+If you want to test the agent, you can do so using [this link](https://fabian-kruse.github.io/pacman/src/PAC-MAN.html).
+
+Otherwise, if you are interested in the implementation of the agents, you might want to clone this repository.
+
+Currently, the project runs with an agent that has not been into training yet. Future work includes an option to select pretrained agents.
+
+Further information about the training process can be found in the console log of your browser.
+
 <!-- LICENSE -->
 ## License
 
-Distributed under the MIT License. See `LICENSE.txt` for more information.
+This project is in no way intended for any commercial use. Its development and employment is simply for learning purposes.
+
+Sources for original game as distributed by [https://github.com/livingston/google-pacman](https://github.com/livingston/google-pacman) with the following copyrights:
+
+Source Code of Game (c) Copyright 2010 Google
+
+PAC-MAN (tm) is (c) 1980 NAMCO BANDAI Games Inc. 
+
+Distributed under the MIT License. See `LICENSE.txt` for more information
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 

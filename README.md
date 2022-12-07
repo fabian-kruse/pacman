@@ -39,6 +39,7 @@ This javascript project implements a deep reinforcement learning agent capable o
       <li><a href="#built-with">Built With</a></li>
       </ol>
     </li>
+    <li><a href="#running-the-project">Running The Project</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
   </ol>
@@ -214,7 +215,7 @@ In contrast to the linear function agent, the actor-critic agent uses a softmax 
 
 Currently, the project is configured using a deep reinforcement agent. 
 
-If you want to test the agent, you can do so using [this link](https://fabian-kruse.github.io/pacman/src/PAC-MAN.html).
+If you want to test the current implementation, you can do so using [this link](https://fabian-kruse.github.io/pacman/src/PAC-MAN.html).
 
 Otherwise, if you are interested in the implementation of the agents, you might want to clone this repository.
 
